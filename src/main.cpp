@@ -135,6 +135,95 @@ vector<double> getFrenet(double x, double y, double theta, const vector<double> 
 
 }
 
+//this will return us the successor states of the current lane
+vector<int> getSuccessorStates(int lane){
+	vector<int> states;
+	states.push_back(lane);
+	if(lane==1){
+		states.push_back(0);
+		states.push_back(2);
+
+	}
+	else if(lane==0){
+		states.push_back(1);
+	}
+	else{
+		states.push_back(1);
+	}
+	return states;
+}
+
+double getCost(int check_lane,bool is_current,double ref_vel,double car_s,double car_d,const vector<vector<double>> &sensor_fusion,int prev_size,double car_vel){
+
+	double cost=0;
+	int nearest_car_ahead=-1;
+	int nearest_car_behind=-1;
+	
+	for(int i=0;i<sensor_fusion.size();i++){
+		double d=sensor_fusion[i][6];
+		
+		if(d<(2+4*check_lane+2) && d>(2+4*check_lane-2)){
+			double veh_s=sensor_fusion[i][5];
+			if(nearest_car_ahead==-1 && car_s<veh_s) nearest_car_ahead=i;
+			else if(veh_s>=car_s && veh_s<sensor_fusion[nearest_car_ahead][5]) nearest_car_ahead=i;
+
+			if(nearest_car_behind==-1 && car_s>veh_s) nearest_car_behind=i;
+			else if(veh_s<=car_s && veh_s>sensor_fusion[nearest_car_behind][5]) nearest_car_behind=i;
+		}
+	}
+
+	if(nearest_car_ahead!=-1){
+		
+		double veh_s=sensor_fusion[nearest_car_ahead][5];
+		double vx=sensor_fusion[nearest_car_ahead][3];
+		double vy=sensor_fusion[nearest_car_ahead][4];
+		double veh_vel=sqrt(vx*vx+vy*vy);
+
+		veh_s+=(double(prev_size)*0.02*veh_vel);
+		
+		double vel_delta;
+		
+		if(veh_vel>=ref_vel) vel_delta=1.0;
+		else vel_delta=ref_vel-veh_vel;
+				
+		double delta_s=(veh_s-car_s);
+		
+		if(is_current){
+			cost+=1-exp(-(vel_delta/ref_vel)/(delta_s/25));
+			
+			return cost;
+			
+		}
+		
+		if(abs(delta_s)<12) cost+=10;
+		
+		cost+=1-exp(-(vel_delta/delta_s));
+		
+	}
+// In current lane dont consider cars behind you;
+if(!is_current){
+	if(nearest_car_behind!=-1){
+		double veh_s=sensor_fusion[nearest_car_behind][5];
+		double vx=sensor_fusion[nearest_car_behind][3];
+		double vy=sensor_fusion[nearest_car_behind][4];
+		double veh_vel=sqrt(vx*vx+vy*vy);
+
+		veh_s+=(double(prev_size)*(0.02*veh_vel)+0.05*(veh_vel));
+		
+		double vel_delta;
+		if(veh_vel<=car_vel) vel_delta=0.0001;
+		else vel_delta=veh_vel-car_vel;
+		
+		double delta_s=abs(car_s-veh_s);
+		
+		if(abs(delta_s)<12) cost+=10;
+		cost+=1-exp(-(vel_delta/delta_s));
+	}
+}
+	
+	return cost;
+
+}
 // Transform from Frenet s,d coordinates to Cartesian x,y
 vector<double> getXY(double s, double d, const vector<double> &maps_s, const vector<double> &maps_x, const vector<double> &maps_y)
 {
@@ -201,7 +290,7 @@ int main() {
   }
 	int lane=1;
 	double ref_vel=0.0;
-	cout<<"HIII";
+	
   h.onMessage([&ref_vel,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&lane](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -258,18 +347,34 @@ int main() {
 
 					check_car_s+=((double)prev_size*.02*check_speed);
 
-					if(check_car_s>car_s && (check_car_s-car_s)<30){
+					if(check_car_s>car_s && (check_car_s-car_s)<25){
 						too_close=true;	
+						
 					}
 				}
 			}
 			
 			
 			if(too_close){
-				ref_vel-=0.25;
+				ref_vel-=0.35;
+				vector<int> states=getSuccessorStates(lane);
+						vector<double> costs;
+						bool is_current=false;
+						for(int index=0;index<states.size();index++){
+							int check_for=states[index];
+							if(check_for==lane) is_current=true;
+							else is_current=false;
+							costs.push_back(getCost(check_for,is_current,50.0,car_s,car_d,sensor_fusion,prev_size,ref_vel));
+						}
+						int min_cost_index=0;
+						for(int index=1;index<costs.size();index++){
+							if(costs[min_cost_index]>costs[index]) min_cost_index=index;
+						}
+
+						lane=states[min_cost_index];
 			}
 			else if(ref_vel<49.0){
-					ref_vel+=0.25;
+					ref_vel+=0.35;
 				}
 			
 
